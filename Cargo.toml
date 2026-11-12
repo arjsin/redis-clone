@@ -1,0 +1,8 @@
+[package]
+name = "redis"
+version = "0.1.0"
+authors = ["Arjun Singh <arj1singh@gmail.com>"]
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.23.0", features = ["full"] }

@@ -28,35 +28,37 @@ async fn process(socket: TcpStream) {
                 println!("unexpected error {}", e);
             }
             Ok(Resp::Array(v)) => {
-                if v.len() == 0 {
+                if v.is_empty() {
                     continue;
                 }
                 let command = match &v[0] {
                     Resp::BulkString(s) => s.to_ascii_lowercase(),
                     v => {
-                        println!("unexpected commend type {:?}", v);
+                        println!("unexpected command type {:?}", v);
+                        framed.send(Resp::SimpleError("Protocol error".to_string())).await.unwrap();
                         continue;
                     }
                 };
-                match command.as_str() {
-                    "ping" => {
+                match command.as_slice() {
+                    b"ping" => {
                         framed
                             .send(Resp::SimpleString("PONG".to_string()))
                             .await
                             .unwrap();
                     }
-                    "echo" => {
+                    b"echo" => {
                         let msg = if v.len() > 1
                             && let Resp::BulkString(s) = &v[1]
                         {
                             s.clone()
                         } else {
-                            String::new()
+                            vec![]
                         };
                         framed.send(Resp::BulkString(msg)).await.unwrap();
                     }
                     v => {
                         println!("unexpected BulkString {:?}", v);
+                        framed.send(Resp::SimpleError("Protocol error".to_string())).await.unwrap();
                     }
                 };
             }

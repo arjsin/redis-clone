@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use crate::protocol::{Resp, RespCodec};
 use crate::storage::Storage;
@@ -48,7 +51,11 @@ pub async fn process(socket: TcpStream, storage: Arc<Mutex<Storage>>, shutdown: 
 pub enum Command {
     Ping,
     Echo(Vec<u8>),
-    Set(Vec<u8>, Vec<u8>),
+    Set {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        expire_in: Option<Duration>,
+    },
     Get(Vec<u8>),
 }
 
@@ -62,9 +69,7 @@ impl TryFrom<Resp> for Command {
             }
             let command = match &v[0] {
                 Resp::BulkString(s) => s.to_ascii_lowercase(),
-                v => {
-                    anyhow::bail!("unexpected command type {:?}", v);
-                }
+                v => anyhow::bail!("unexpected command type {:?}", v),
             };
             match command.as_slice() {
                 b"ping" => Ok(Command::Ping),
@@ -78,16 +83,37 @@ impl TryFrom<Resp> for Command {
                     Ok(Command::Echo(msg))
                 }
                 b"set" => {
-                    if v.len() != 3 {
-                        anyhow::bail!("wrong number of arguments for 'set' command");
-                    }
+                    let expire_in = match v.len() {
+                        3 => None,
+                        5 => {
+                            let Some(Resp::BulkString(ms)) = v.pop() else {
+                                anyhow::bail!("invalid arguments for 'set' command");
+                            };
+                            let Some(Resp::BulkString(unit)) = v.pop() else {
+                                anyhow::bail!("invalid arguments for 'set' command");
+                            };
+                            if !unit.eq_ignore_ascii_case(b"px") {
+                                anyhow::bail!("syntax error");
+                            }
+                            let ms: u64 = std::str::from_utf8(&ms)?.parse()?;
+                            if ms == 0 {
+                                anyhow::bail!("invalid expire time in 'set' command");
+                            }
+                            Some(Duration::from_millis(ms))
+                        }
+                        _ => anyhow::bail!("wrong number of arguments for 'set' command"),
+                    };
                     let Some(Resp::BulkString(value)) = v.pop() else {
                         anyhow::bail!("invalid arguments for 'set' command");
                     };
                     let Some(Resp::BulkString(key)) = v.pop() else {
                         anyhow::bail!("invalid arguments for 'set' command");
                     };
-                    Ok(Command::Set(key, value))
+                    Ok(Command::Set {
+                        key,
+                        value,
+                        expire_in,
+                    })
                 }
                 b"get" => {
                     if v.len() != 2 {
@@ -113,8 +139,12 @@ impl Command {
         match self {
             Command::Ping => Resp::SimpleString("PONG".to_string()),
             Command::Echo(msg) => Resp::BulkString(msg),
-            Command::Set(key, value) => {
-                storage.set(key, value);
+            Command::Set {
+                key,
+                value,
+                expire_in,
+            } => {
+                storage.set(key, value, expire_in);
                 Resp::SimpleString("OK".to_string())
             }
             Command::Get(key) => match storage.get(&key) {

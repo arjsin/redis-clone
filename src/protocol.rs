@@ -62,7 +62,9 @@ impl<'a> Cursor<'a> {
             return Ok(None);
         };
 
-        String::from_utf8(line.to_vec()).map(Some).map_err(Into::into)
+        String::from_utf8(line.to_vec())
+            .map(Some)
+            .map_err(Into::into)
     }
 
     fn take_line_i32(&mut self) -> Result<Option<i32>, Error> {

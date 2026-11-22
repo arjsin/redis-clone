@@ -1,21 +1,36 @@
 use crate::protocol::{Resp, RespCodec};
 use anyhow::Error;
-use futures::{Sink, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
+use tokio_util::sync::CancellationToken;
 
-pub async fn process(socket: TcpStream) {
+pub async fn process(socket: TcpStream, shutdown: CancellationToken) {
     let mut framed = Framed::new(socket, RespCodec);
-    while let Some(frame) = framed.next().await {
-        let v = match frame {
+    loop {
+        let frame = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            frame = framed.next() => frame,
+        };
+        let Some(frame) = frame else {
+            break;
+        };
+
+        let sent = match frame {
             Ok(f) => match Command::try_from(f) {
-                Ok(c) => c.handle(&mut framed).await,
+                Ok(c) => framed.send(c.execute()).await,
                 Err(e) => framed.send(Resp::SimpleError(e.to_string())).await,
             },
-            Err(e) => framed.send(Resp::SimpleError(e.to_string())).await,
+            Err(e) => {
+                // A decode error leaves the stream desynced and can't be recovered,
+                // so report and close it.
+                let _ = framed.send(Resp::SimpleError(e.to_string())).await;
+                break;
+            }
         };
-        if let Err(e) = v {
-            println!("error while sending to client: {}", e);
+        if let Err(e) = sent {
+            eprintln!("error while sending to client: {e}");
             break;
         }
     }
@@ -62,16 +77,10 @@ impl TryFrom<Resp> for Command {
 }
 
 impl Command {
-    async fn handle<S: Unpin + Sink<Resp>>(self, framed: &mut S) -> Result<(), Error>
-    where
-        <S as futures::Sink<Resp>>::Error: Into<Error>,
-    {
+    fn execute(self) -> Resp {
         match self {
-            Command::Ping => framed
-                .send(Resp::SimpleString("PONG".to_string()))
-                .await
-                .map_err(Into::into),
-            Command::Echo(msg) => framed.send(Resp::BulkString(msg)).await.map_err(Into::into),
+            Command::Ping => Resp::SimpleString("PONG".to_string()),
+            Command::Echo(msg) => Resp::BulkString(msg),
         }
     }
 }

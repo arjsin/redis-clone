@@ -8,20 +8,18 @@ A Redis-compatible server written in Rust, built up incrementally as I work thro
 
 ## Running
 
-The project has two implementations of the same server: a thread-per-connection version and a Tokio-based async version.
+The project has a Tokio-based async implementation.
 
 ```sh
-cargo run --bin sync
-cargo run --bin async
+cargo run
 ```
 
-Both listen on `127.0.0.1:6379` by default, so run one at a time.
+It listen on `127.0.0.1:6379` by default.
 
 For release builds:
 
 ```sh
-cargo run --release --bin sync
-cargo run --release --bin async
+cargo run --release
 ```
 
 ## Trying it out

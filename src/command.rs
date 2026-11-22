@@ -1,11 +1,14 @@
+use std::sync::{Arc, Mutex};
+
 use crate::protocol::{Resp, RespCodec};
+use crate::storage::Storage;
 use anyhow::Error;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
 
-pub async fn process(socket: TcpStream, shutdown: CancellationToken) {
+pub async fn process(socket: TcpStream, storage: Arc<Mutex<Storage>>, shutdown: CancellationToken) {
     let mut framed = Framed::new(socket, RespCodec);
     loop {
         let frame = tokio::select! {
@@ -19,7 +22,13 @@ pub async fn process(socket: TcpStream, shutdown: CancellationToken) {
 
         let sent = match frame {
             Ok(f) => match Command::try_from(f) {
-                Ok(c) => framed.send(c.execute()).await,
+                Ok(c) => {
+                    let reply = {
+                        let mut storage = storage.lock().unwrap();
+                        c.execute(&mut storage)
+                    };
+                    framed.send(reply).await
+                }
                 Err(e) => framed.send(Resp::SimpleError(e.to_string())).await,
             },
             Err(e) => {
@@ -39,6 +48,8 @@ pub async fn process(socket: TcpStream, shutdown: CancellationToken) {
 pub enum Command {
     Ping,
     Echo(Vec<u8>),
+    Set(Vec<u8>, Vec<u8>),
+    Get(Vec<u8>),
 }
 
 impl TryFrom<Resp> for Command {
@@ -66,6 +77,27 @@ impl TryFrom<Resp> for Command {
                     };
                     Ok(Command::Echo(msg))
                 }
+                b"set" => {
+                    if v.len() != 3 {
+                        anyhow::bail!("wrong number of arguments for 'set' command");
+                    }
+                    let Some(Resp::BulkString(value)) = v.pop() else {
+                        anyhow::bail!("invalid arguments for 'set' command");
+                    };
+                    let Some(Resp::BulkString(key)) = v.pop() else {
+                        anyhow::bail!("invalid arguments for 'set' command");
+                    };
+                    Ok(Command::Set(key, value))
+                }
+                b"get" => {
+                    if v.len() != 2 {
+                        anyhow::bail!("wrong number of arguments for 'get' command");
+                    }
+                    let Some(Resp::BulkString(key)) = v.pop() else {
+                        anyhow::bail!("invalid arguments for 'get' command");
+                    };
+                    Ok(Command::Get(key))
+                }
                 v => {
                     anyhow::bail!("unexpected BulkString {:?}", v);
                 }
@@ -77,10 +109,18 @@ impl TryFrom<Resp> for Command {
 }
 
 impl Command {
-    fn execute(self) -> Resp {
+    fn execute(self, storage: &mut Storage) -> Resp {
         match self {
             Command::Ping => Resp::SimpleString("PONG".to_string()),
             Command::Echo(msg) => Resp::BulkString(msg),
+            Command::Set(key, value) => {
+                storage.set(key, value);
+                Resp::SimpleString("OK".to_string())
+            }
+            Command::Get(key) => match storage.get(&key) {
+                Some(value) => Resp::BulkString(value),
+                None => Resp::Null,
+            },
         }
     }
 }

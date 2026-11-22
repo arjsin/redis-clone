@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -6,6 +7,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::command;
+use crate::storage::Storage;
 
 /// How long to wait for active connections to finish before aborting them.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -18,6 +20,7 @@ pub struct Server {
     listener: TcpListener,
     local_addr: SocketAddr,
     shutdown: CancellationToken,
+    storage: Arc<Mutex<Storage>>,
 }
 
 impl Server {
@@ -30,6 +33,7 @@ impl Server {
             listener,
             local_addr,
             shutdown: CancellationToken::new(),
+            storage: Arc::new(Mutex::new(Storage::default())),
         })
     }
 
@@ -64,8 +68,9 @@ impl Server {
                 accepted = self.listener.accept() => match accepted {
                     Ok((socket, _peer)) => {
                         let connection_shutdown = self.shutdown.clone();
+                        let storage = Arc::clone(&self.storage);
                         connections.spawn(async move {
-                            command::process(socket, connection_shutdown).await;
+                            command::process(socket, storage, connection_shutdown).await;
                         });
                     }
                     Err(err) => {

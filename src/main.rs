@@ -1,6 +1,7 @@
 mod command;
 mod protocol;
 mod server;
+mod storage;
 
 use server::Server;
 
@@ -45,6 +46,6 @@ async fn shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => println!("received Ctrl+C"),
-        _ = terminate => print!("received terminate signal"),
+        _ = terminate => println!("received terminate signal"),
     }
 }

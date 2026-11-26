@@ -1,17 +1,14 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 
 use crate::protocol::{Resp, RespCodec};
-use crate::storage::Storage;
+use crate::storage_async::StorageHandle;
 use anyhow::Error;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
 
-pub async fn process(socket: TcpStream, storage: Arc<Mutex<Storage>>, shutdown: CancellationToken) {
+pub async fn process(socket: TcpStream, storage: StorageHandle, shutdown: CancellationToken) {
     let mut framed = Framed::new(socket, RespCodec);
     loop {
         let frame = tokio::select! {
@@ -26,10 +23,7 @@ pub async fn process(socket: TcpStream, storage: Arc<Mutex<Storage>>, shutdown: 
         let sent = match frame {
             Ok(f) => match Command::try_from(f) {
                 Ok(c) => {
-                    let reply = {
-                        let mut storage = storage.lock().unwrap();
-                        c.execute(&mut storage)
-                    };
+                    let reply = c.execute(&storage).await;
                     framed.send(reply).await
                 }
                 Err(e) => framed.send(Resp::SimpleError(e.to_string())).await,
@@ -135,7 +129,7 @@ impl TryFrom<Resp> for Command {
 }
 
 impl Command {
-    fn execute(self, storage: &mut Storage) -> Resp {
+    async fn execute(self, storage: &StorageHandle) -> Resp {
         match self {
             Command::Ping => Resp::SimpleString("PONG".to_string()),
             Command::Echo(msg) => Resp::BulkString(msg),
@@ -143,13 +137,14 @@ impl Command {
                 key,
                 value,
                 expire_in,
-            } => {
-                storage.set(key, value, expire_in);
-                Resp::SimpleString("OK".to_string())
-            }
-            Command::Get(key) => match storage.get(&key) {
-                Some(value) => Resp::BulkString(value),
-                None => Resp::Null,
+            } => match storage.set(key, value, expire_in).await {
+                Ok(()) => Resp::SimpleString("OK".to_string()),
+                Err(err) => Resp::SimpleError(format!("ERR {err}")),
+            },
+            Command::Get(key) => match storage.get(key).await {
+                Ok(Some(value)) => Resp::BulkString(value),
+                Ok(None) => Resp::Null,
+                Err(err) => Resp::SimpleError(format!("ERR {err}")),
             },
         }
     }

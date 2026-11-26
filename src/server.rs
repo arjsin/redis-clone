@@ -1,13 +1,12 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::net::{TcpListener, ToSocketAddrs};
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::command;
-use crate::storage::Storage;
+use crate::storage_async::StorageHandle;
 
 /// How long to wait for active connections to finish before aborting them.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -20,7 +19,8 @@ pub struct Server {
     listener: TcpListener,
     local_addr: SocketAddr,
     shutdown: CancellationToken,
-    storage: Arc<Mutex<Storage>>,
+    storage: StorageHandle,
+    storage_task: JoinHandle<()>,
 }
 
 impl Server {
@@ -28,12 +28,14 @@ impl Server {
     pub async fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
+        let (storage, storage_task) = StorageHandle::spawn();
 
         Ok(Self {
             listener,
             local_addr,
             shutdown: CancellationToken::new(),
-            storage: Arc::new(Mutex::new(Storage::default())),
+            storage,
+            storage_task,
         })
     }
 
@@ -68,7 +70,7 @@ impl Server {
                 accepted = self.listener.accept() => match accepted {
                     Ok((socket, _peer)) => {
                         let connection_shutdown = self.shutdown.clone();
-                        let storage = Arc::clone(&self.storage);
+                        let storage = self.storage.clone();
                         connections.spawn(async move {
                             command::process(socket, storage, connection_shutdown).await;
                         });
@@ -82,6 +84,18 @@ impl Server {
         }
 
         drain_connections(&mut connections).await;
+
+        // Closing the last handle lets the actor drain its mailbox and exit.
+        let Server {
+            storage,
+            storage_task,
+            ..
+        } = self;
+        drop(storage);
+        if let Err(err) = storage_task.await {
+            eprintln!("storage task failed: {err}");
+        }
+
         Ok(())
     }
 }

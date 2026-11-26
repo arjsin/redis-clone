@@ -2,6 +2,7 @@ mod command;
 mod protocol;
 mod server;
 mod storage;
+mod storage_async;
 
 use server::Server;
 

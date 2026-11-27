@@ -11,6 +11,7 @@ pub enum Resp {
     SimpleString(String),
     SimpleError(String),
     BulkString(Vec<u8>),
+    Integer(i64),
     Null,
     Array(Vec<Resp>),
     NullArray,
@@ -67,13 +68,13 @@ impl<'a> Cursor<'a> {
             .map_err(Into::into)
     }
 
-    fn take_line_i32(&mut self) -> Result<Option<i32>, Error> {
+    fn take_line_i64(&mut self) -> Result<Option<i64>, Error> {
         let Some(line) = self.take_line() else {
             return Ok(None);
         };
 
         str::from_utf8(line)?
-            .parse::<i32>()
+            .parse::<i64>()
             .map(Some)
             .map_err(Into::into)
     }
@@ -108,15 +109,22 @@ fn decode_cursor(cursor: &mut Cursor) -> Result<Option<Resp>> {
             };
             Ok(Some(Resp::SimpleError(error)))
         }
+        // Integer
+        b':' => {
+            let Some(number) = cursor.take_line_i64()? else {
+                return Ok(None);
+            };
+            Ok(Some(Resp::Integer(number)))
+        }
         // Bulk string
         b'$' => {
-            let Some(len) = cursor.take_line_i32()? else {
+            let Some(len) = cursor.take_line_i64()? else {
                 return Ok(None);
             };
             match len {
                 -1 => Ok(Some(Resp::Null)),
                 n if n >= 0 => {
-                    let Some(data) = cursor.take_bytes(len as usize) else {
+                    let Some(data) = cursor.take_bytes(usize::try_from(n)?) else {
                         return Ok(None);
                     };
                     let data = data.to_vec();
@@ -127,14 +135,14 @@ fn decode_cursor(cursor: &mut Cursor) -> Result<Option<Resp>> {
         }
         // Arrays
         b'*' => {
-            let Some(len) = cursor.take_line_i32()? else {
+            let Some(len) = cursor.take_line_i64()? else {
                 return Ok(None);
             };
             match len {
                 -1 => Ok(Some(Resp::NullArray)),
                 n if n >= 0 => {
                     let mut array = vec![];
-                    for _ in 0..len {
+                    for _ in 0..n {
                         let Some(element) = decode_cursor(cursor)? else {
                             return Ok(None);
                         };
@@ -178,6 +186,9 @@ impl Encoder<Resp> for RespCodec {
                 write!(dst, "${}\r\n", s.len())?;
                 dst.extend_from_slice(s.as_slice());
                 dst.write_str("\r\n")?;
+            }
+            Resp::Integer(n) => {
+                write!(dst, ":{}\r\n", n)?;
             }
             Resp::Array(a) => {
                 write!(dst, "*{}\r\n", a.len())?;

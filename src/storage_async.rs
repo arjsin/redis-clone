@@ -1,24 +1,12 @@
-use std::{fmt, time::Duration};
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::storage::Storage;
+use crate::storage::{Storage, StorageError};
 
 /// How many requests the actor can queue before senders start waiting.
 const MAILBOX_CAPACITY: usize = 1_024;
-
-/// Returned when the storage actor is no longer running.
-#[derive(Debug, Clone, Copy)]
-pub struct StorageClosed;
-
-impl fmt::Display for StorageClosed {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("storage actor is not running")
-    }
-}
-
-impl std::error::Error for StorageClosed {}
 
 /// A unit of work applied to the owned [`Storage`] on the actor task.
 type Job = Box<dyn FnOnce(&mut Storage) + Send + 'static>;
@@ -43,8 +31,8 @@ impl StorageHandle {
         (Self { tx }, task)
     }
 
-    pub async fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>, StorageClosed> {
-        self.call(move |storage| storage.get(&key)).await
+    pub async fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>, StorageError> {
+        self.call(move |storage| storage.get(&key)).await?
     }
 
     pub async fn set(
@@ -52,22 +40,26 @@ impl StorageHandle {
         key: Vec<u8>,
         value: Vec<u8>,
         expire_in: Option<Duration>,
-    ) -> Result<(), StorageClosed> {
+    ) -> Result<(), StorageError> {
         self.call(move |storage| storage.set(key, value, expire_in))
             .await
+    }
+
+    pub async fn rpush(&self, key: Vec<u8>, values: Vec<Vec<u8>>) -> Result<usize, StorageError> {
+        self.call(move |storage| storage.rpush(key, values)).await?
     }
 
     /// Queue `op` on the actor and await its result.
     async fn call<T: Send + 'static>(
         &self,
         op: impl FnOnce(&mut Storage) -> T + Send + 'static,
-    ) -> Result<T, StorageClosed> {
+    ) -> Result<T, StorageError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let job: Job = Box::new(move |storage| {
             let _ = reply_tx.send(op(storage));
         });
 
-        self.tx.send(job).await.map_err(|_| StorageClosed)?;
-        reply_rx.await.map_err(|_| StorageClosed)
+        self.tx.send(job).await.map_err(|_| StorageError::Closed)?;
+        reply_rx.await.map_err(|_| StorageError::Closed)
     }
 }

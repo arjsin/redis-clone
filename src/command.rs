@@ -51,6 +51,10 @@ pub enum Command {
         expire_in: Option<Duration>,
     },
     Get(Vec<u8>),
+    RPush {
+        key: Vec<u8>,
+        values: Vec<Vec<u8>>,
+    },
 }
 
 impl TryFrom<Resp> for Command {
@@ -118,6 +122,23 @@ impl TryFrom<Resp> for Command {
                     };
                     Ok(Command::Get(key))
                 }
+                b"rpush" => {
+                    if v.len() < 3 {
+                        anyhow::bail!("wrong number of arguments for 'rpush' command");
+                    }
+                    let mut args = v.into_iter().skip(1);
+                    let Some(Resp::BulkString(key)) = args.next() else {
+                        anyhow::bail!("invalid arguments for 'rpush' command");
+                    };
+                    let mut values = Vec::new();
+                    for arg in args {
+                        let Resp::BulkString(value) = arg else {
+                            anyhow::bail!("invalid arguments for 'rpush' command");
+                        };
+                        values.push(value);
+                    }
+                    Ok(Command::RPush { key, values })
+                }
                 v => {
                     anyhow::bail!("unexpected BulkString {:?}", v);
                 }
@@ -139,12 +160,16 @@ impl Command {
                 expire_in,
             } => match storage.set(key, value, expire_in).await {
                 Ok(()) => Resp::SimpleString("OK".to_string()),
-                Err(err) => Resp::SimpleError(format!("ERR {err}")),
+                Err(err) => Resp::SimpleError(err.to_string()),
             },
             Command::Get(key) => match storage.get(key).await {
                 Ok(Some(value)) => Resp::BulkString(value),
                 Ok(None) => Resp::Null,
-                Err(err) => Resp::SimpleError(format!("ERR {err}")),
+                Err(err) => Resp::SimpleError(err.to_string()),
+            },
+            Command::RPush { key, values } => match storage.rpush(key, values).await {
+                Ok(len) => Resp::Integer(len as i64),
+                Err(err) => Resp::SimpleError(err.to_string()),
             },
         }
     }

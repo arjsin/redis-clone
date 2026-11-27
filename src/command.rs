@@ -55,6 +55,11 @@ pub enum Command {
         key: Vec<u8>,
         values: Vec<Vec<u8>>,
     },
+    LRange {
+        key: Vec<u8>,
+        start: i64,
+        stop: i64,
+    },
 }
 
 impl TryFrom<Resp> for Command {
@@ -139,6 +144,23 @@ impl TryFrom<Resp> for Command {
                     }
                     Ok(Command::RPush { key, values })
                 }
+                b"lrange" => {
+                    if v.len() != 4 {
+                        anyhow::bail!("wrong number of arguments for 'lrange' command");
+                    }
+                    let Some(Resp::BulkString(stop)) = v.pop() else {
+                        anyhow::bail!("invalid arguments for 'lrange' command");
+                    };
+                    let Some(Resp::BulkString(start)) = v.pop() else {
+                        anyhow::bail!("invalid arguments for 'lrange' command");
+                    };
+                    let Some(Resp::BulkString(key)) = v.pop() else {
+                        anyhow::bail!("invalid arguments for 'lrange' command");
+                    };
+                    let start = parse_index(&start)?;
+                    let stop = parse_index(&stop)?;
+                    Ok(Command::LRange { key, start, stop })
+                }
                 v => {
                     anyhow::bail!("unexpected BulkString {:?}", v);
                 }
@@ -171,6 +193,16 @@ impl Command {
                 Ok(len) => Resp::Integer(len as i64),
                 Err(err) => Resp::SimpleError(err.to_string()),
             },
+            Command::LRange { key, start, stop } => match storage.lrange(key, start, stop).await {
+                Ok(values) => Resp::Array(values.into_iter().map(Resp::BulkString).collect()),
+                Err(err) => Resp::SimpleError(err.to_string()),
+            },
         }
     }
+}
+
+fn parse_index(bytes: &[u8]) -> Result<i64, Error> {
+    std::str::from_utf8(bytes)?
+        .parse()
+        .map_err(|_| anyhow::anyhow!("value is not an integer or out of range"))
 }

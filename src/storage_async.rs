@@ -49,6 +49,16 @@ impl StorageHandle {
         self.call(move |storage| storage.rpush(key, values)).await?
     }
 
+    pub async fn lrange(
+        &self,
+        key: Vec<u8>,
+        start: i64,
+        stop: i64,
+    ) -> Result<Vec<Vec<u8>>, StorageError> {
+        self.call(move |storage| storage.lrange(&key, start, stop))
+            .await?
+    }
+
     /// Queue `op` on the actor and await its result.
     async fn call<T: Send + 'static>(
         &self,

@@ -58,6 +58,32 @@ impl Storage {
         }
     }
 
+    pub fn lrange(
+        &mut self,
+        key: &[u8],
+        start: i64,
+        stop: i64,
+    ) -> Result<Vec<Vec<u8>>, StorageError> {
+        let now = Instant::now();
+        self.remove_if_expired(key, now);
+
+        match self.0.get(key).map(|entry| &entry.value) {
+            Some(Value::List(list)) => {
+                let Some((start, stop)) = normalize_range(list.len(), start, stop) else {
+                    return Ok(Vec::new());
+                };
+                Ok(list
+                    .iter()
+                    .skip(start)
+                    .take(stop - start + 1)
+                    .cloned()
+                    .collect())
+            }
+            Some(_) => Err(StorageError::WrongType),
+            None => Ok(Vec::new()),
+        }
+    }
+
     pub fn rpush(&mut self, key: Vec<u8>, values: Vec<Vec<u8>>) -> Result<usize, StorageError> {
         let now = Instant::now();
         self.remove_if_expired(&key, now);
@@ -96,4 +122,27 @@ impl Storage {
             self.0.remove(key);
         }
     }
+}
+
+/// Convert Redis-style inclusive indices (which may be negative) into a
+/// half-open-friendly `(start, stop)` pair, or `None` when the range is empty.
+fn normalize_range(len: usize, start: i64, stop: i64) -> Option<(usize, usize)> {
+    let len = i64::try_from(len).ok()?;
+    let start = if start < 0 {
+        start.saturating_add(len)
+    } else {
+        start
+    }
+    .max(0);
+    let stop = if stop < 0 {
+        stop.saturating_add(len)
+    } else {
+        stop
+    }
+    .min(len - 1);
+
+    if start > stop {
+        return None;
+    }
+    Some((usize::try_from(start).ok()?, usize::try_from(stop).ok()?))
 }

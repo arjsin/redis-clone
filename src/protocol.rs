@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use anyhow::{Error, Result};
+use bytes::Bytes;
 use tokio_util::{
     bytes::{Buf, BytesMut},
     codec::{Decoder, Encoder},
@@ -10,7 +11,7 @@ use tokio_util::{
 pub enum Resp {
     SimpleString(String),
     SimpleError(String),
-    BulkString(Vec<u8>),
+    BulkString(Bytes),
     Integer(i64),
     Null,
     Array(Vec<Resp>),
@@ -127,7 +128,7 @@ fn decode_cursor(cursor: &mut Cursor) -> Result<Option<Resp>> {
                     let Some(data) = cursor.take_bytes(usize::try_from(n)?) else {
                         return Ok(None);
                     };
-                    let data = data.to_vec();
+                    let data = Bytes::copy_from_slice(data);
                     Ok(Some(Resp::BulkString(data)))
                 }
                 _ => anyhow::bail!("protocol error"),
@@ -184,7 +185,7 @@ impl Encoder<Resp> for RespCodec {
             }
             Resp::BulkString(s) => {
                 write!(dst, "${}\r\n", s.len())?;
-                dst.extend_from_slice(s.as_slice());
+                dst.extend_from_slice(&s);
                 dst.write_str("\r\n")?;
             }
             Resp::Integer(n) => {

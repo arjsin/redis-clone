@@ -4,8 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bytes::Bytes;
+
 #[derive(Default)]
-pub struct Storage(HashMap<Vec<u8>, Entry>);
+pub struct Storage(HashMap<Bytes, Entry>);
 
 pub struct Entry {
     value: Value,
@@ -13,8 +15,8 @@ pub struct Entry {
 }
 
 pub enum Value {
-    String(Vec<u8>),
-    List(VecDeque<Vec<u8>>),
+    String(Bytes),
+    List(VecDeque<Bytes>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +39,7 @@ impl fmt::Display for StorageError {
 impl std::error::Error for StorageError {}
 
 impl Storage {
-    pub fn set(&mut self, key: Vec<u8>, value: Vec<u8>, expire_in: Option<Duration>) {
+    pub fn set(&mut self, key: Bytes, value: Bytes, expire_in: Option<Duration>) {
         self.0.insert(
             key,
             Entry {
@@ -47,11 +49,8 @@ impl Storage {
         );
     }
 
-    pub fn get(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
-        let now = Instant::now();
-        self.remove_if_expired(key, now);
-
-        match self.0.get(key).map(|entry| &entry.value) {
+    pub fn get(&mut self, key: &[u8]) -> Result<Option<Bytes>, StorageError> {
+        match self.live(key).map(|entry| &entry.value) {
             Some(Value::String(value)) => Ok(Some(value.clone())),
             Some(_) => Err(StorageError::WrongType),
             None => Ok(None),
@@ -63,11 +62,8 @@ impl Storage {
         key: &[u8],
         start: i64,
         stop: i64,
-    ) -> Result<Vec<Vec<u8>>, StorageError> {
-        let now = Instant::now();
-        self.remove_if_expired(key, now);
-
-        match self.0.get(key).map(|entry| &entry.value) {
+    ) -> Result<Vec<Bytes>, StorageError> {
+        match self.live(key).map(|entry| &entry.value) {
             Some(Value::List(list)) => {
                 let Some((start, stop)) = normalize_range(list.len(), start, stop) else {
                     return Ok(Vec::new());
@@ -84,11 +80,8 @@ impl Storage {
         }
     }
 
-    pub fn rpush(&mut self, key: Vec<u8>, values: Vec<Vec<u8>>) -> Result<usize, StorageError> {
-        let now = Instant::now();
-        self.remove_if_expired(&key, now);
-
-        match self.0.get_mut(&key) {
+    pub fn rpush(&mut self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StorageError> {
+        match self.live_mut(&key) {
             Some(Entry {
                 value: Value::List(list),
                 ..
@@ -98,7 +91,7 @@ impl Storage {
             }
             Some(_) => Err(StorageError::WrongType),
             None => {
-                let list: VecDeque<Vec<u8>> = values.into_iter().collect();
+                let list: VecDeque<Bytes> = values.into_iter().collect();
                 let len = list.len();
                 self.0.insert(
                     key,
@@ -110,6 +103,18 @@ impl Storage {
                 Ok(len)
             }
         }
+    }
+
+    /// Look up a key, lazily removing it first if it has expired.
+    fn live(&mut self, key: &[u8]) -> Option<&Entry> {
+        self.remove_if_expired(key, Instant::now());
+        self.0.get(key)
+    }
+
+    /// Mutable variant of [`Storage::live`].
+    fn live_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
+        self.remove_if_expired(key, Instant::now());
+        self.0.get_mut(key)
     }
 
     fn remove_if_expired(&mut self, key: &[u8], now: Instant) {

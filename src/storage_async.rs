@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -31,30 +32,30 @@ impl StorageHandle {
         (Self { tx }, task)
     }
 
-    pub async fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>, StorageError> {
+    pub async fn get(&self, key: Bytes) -> Result<Option<Bytes>, StorageError> {
         self.call(move |storage| storage.get(&key)).await?
     }
 
     pub async fn set(
         &self,
-        key: Vec<u8>,
-        value: Vec<u8>,
+        key: Bytes,
+        value: Bytes,
         expire_in: Option<Duration>,
     ) -> Result<(), StorageError> {
         self.call(move |storage| storage.set(key, value, expire_in))
             .await
     }
 
-    pub async fn rpush(&self, key: Vec<u8>, values: Vec<Vec<u8>>) -> Result<usize, StorageError> {
+    pub async fn rpush(&self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StorageError> {
         self.call(move |storage| storage.rpush(key, values)).await?
     }
 
     pub async fn lrange(
         &self,
-        key: Vec<u8>,
+        key: Bytes,
         start: i64,
         stop: i64,
-    ) -> Result<Vec<Vec<u8>>, StorageError> {
+    ) -> Result<Vec<Bytes>, StorageError> {
         self.call(move |storage| storage.lrange(&key, start, stop))
             .await?
     }
